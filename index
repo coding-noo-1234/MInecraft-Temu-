@@ -1,0 +1,2317 @@
+for (let y = 0; y < CHUNK_HEIGHT; y++) {
+    const idx = getIdx(x, y, z);
+    if (y === 0) { data[idx] = BLOCK.BEDROCK; continue; }
+
+    if (y > height) {
+      if (y <= SEA_LEVEL) data[idx] = BLOCK.WATER;
+      else data[idx] = BLOCK.AIR;
+      continue;
+    }
+
+    const isSubsurface = (y < height - 3);
+    const caveDensity = isSubsurface ? Perlin.noise3D(wx * 0.08, y * 0.12, wz * 0.08) : 0;
+    const isCave = isSubsurface && (caveDensity > 0.28);
+
+    if (isCave) {
+      if (y <= 3) data[idx] = BLOCK.LAVA;
+      else data[idx] = BLOCK.AIR;
+      continue;
+    }
+
+    if (y === height) {
+      if (biome === 'DESERT' || y < SEA_LEVEL + 1) data[idx] = BLOCK.SAND;
+      else data[idx] = BLOCK.GRASS;
+    } else if (y >= height - 3) {
+      if (biome === 'DESERT') data[idx] = BLOCK.SAND;
+      else data[idx] = BLOCK.DIRT;
+    } else {
+      const r = Math.random();
+      if (y < 6 && r < 0.015) data[idx] = BLOCK.DIAMOND_ORE;
+      else if (r < 0.035) data[idx] = BLOCK.COAL_ORE;
+      else if (r < 0.065) data[idx] = BLOCK.IRON_ORE;
+      else data[idx] = BLOCK.STONE;
+    }
+  }
+
+  // Feature Trees & Controlled 1-Golem, 2-Villager Settlements
+  if (x > 2 && x < CHUNK_SIZE - 7 && z > 2 && z < CHUNK_SIZE - 7) {
+    if (biome === 'PLAINS' && !villageSpawnedInChunk && Math.random() < 0.025 && height >= SEA_LEVEL + 1) {
+      buildVillageHouse(data, x, height, z);
+      villageSpawnedInChunk = true;
+
+      // Spawn 2 Villagers & EXACTLY 1 Iron Golem Protector
+      setTimeout(() => {
+        spawnMob('villager', wx + 2.5, height + 1.5, wz + 2.5);
+        spawnMob('villager', wx + 3.0, height + 1.5, wz + 4.5);
+        spawnMob('iron_golem', wx + 7.0, height + 1.5, wz + 7.0);
+      }, 120);
+    } else if ((biome === 'FOREST' && Math.random() < 0.035) || (biome === 'PLAINS' && Math.random() < 0.008)) {
+      if (height >= SEA_LEVEL + 1 && data[getIdx(x, height, z)] === BLOCK.GRASS) {
+        buildTreeInMemory(data, x, height + 1, z);
+      }
+    }
+  }
+}
+}
+return data;
+}
+
+function buildTreeInMemory(data, x, y, z) {
+const getIdx = (lx, ly, lz) => lx + CHUNK_SIZE * (ly + CHUNK_HEIGHT * lz);
+const trunkHeight = 4 + Math.floor(Math.random() * 2);
+for (let ty = 0; ty < trunkHeight; ty++) {
+if (y + ty < CHUNK_HEIGHT) data[getIdx(x, y + ty, z)] = BLOCK.WOOD;
+}
+const leafTop = y + trunkHeight;
+for (let ly = leafTop - 2; ly <= leafTop + 1; ly++) {
+const radius = (ly >= leafTop) ? 1 : 2;
+for (let lx = x - radius; lx <= x + radius; lx++) {
+for (let lz = z - radius; lz <= z + radius; lz++) {
+if (lx >= 0 && lx < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE && ly < CHUNK_HEIGHT) {
+const idx = getIdx(lx, ly, lz);
+if (data[idx] === BLOCK.AIR) data[idx] = BLOCK.LEAVES;
+}
+}
+}
+}
+}
+
+const faceDirs = [
+{ dir: [ 0,  0, -1], corners: [[0,0,0],[0,1,0],[1,1,0],[1,0,0]], normal: [ 0, 0,-1] },
+{ dir: [ 0,  0,  1], corners: [[1,0,1],[1,1,1],[0,1,1],[0,0,1]], normal: [ 0, 0, 1] },
+{ dir: [ 0, -1,  0], corners: [[0,0,0],[1,0,0],[1,0,1],[0,0,1]], normal: [ 0,-1, 0] },
+{ dir: [ 0,  1,  0], corners: [[0,1,0],[0,1,1],[1,1,1],[1,1,0]], normal: [ 0, 1, 0] },
+{ dir: [-1,  0,  0], corners: [[0,0,1],[0,1,1],[0,1,0],[0,0,0]], normal: [-1, 0, 0] },
+{ dir: [ 1,  0,  0], corners: [[1,0,0],[1,1,0],[1,1,1],[1,0,1]], normal: [ 1, 0, 0] }
+];
+
+function rebuildChunkMesh(cx, cz) {
+const chunk = chunks.get(chunkKey(cx, cz));
+if (!chunk) return;
+if (chunk.group) scene.remove(chunk.group);
+
+const chunkGroup = new THREE.Group();
+const subGeoms = {};
+
+for (let x = 0; x < CHUNK_SIZE; x++) {
+for (let y = 0; y < CHUNK_HEIGHT; y++) {
+for (let z = 0; z < CHUNK_SIZE; z++) {
+const id = chunk.data[x + CHUNK_SIZE * (y + CHUNK_HEIGHT * z)];
+if (id === BLOCK.AIR) continue;
+
+    const def = BLOCK_DEFS[id];
+    const wx = cx * CHUNK_SIZE + x;
+    const wz = cz * CHUNK_SIZE + z;
+
+    for (let d = 0; d < faceDirs.length; d++) {
+      const face = faceDirs[d];
+      const nx = wx + face.dir[0], ny = y + face.dir[1], nz = wz + face.dir[2];
+      const neighbor = getBlock(nx, ny, nz);
+
+      if (neighbor !== BLOCK.AIR && neighbor !== BLOCK.WATER && neighbor !== BLOCK.LAVA && !BLOCK_DEFS[neighbor]?.transparent) {
+        continue;
+      }
+      if (def.transparent && neighbor === id) continue;
+
+      let targetTexKey = def.texId;
+      if (d === 3 && def.topTexId) targetTexKey = def.topTexId;
+
+      if (!subGeoms[targetTexKey]) {
+        subGeoms[targetTexKey] = {
+          positions: [], normals: [], uvs: [], indices: [], offset: 0,
+          isTrans: !!def.transparent, blockId: id
+        };
+      }
+      const g = subGeoms[targetTexKey];
+
+      for (const c of face.corners) {
+        g.positions.push(wx + c[0], y + c[1], wz + c[2]);
+        g.normals.push(face.normal[0], face.normal[1], face.normal[2]);
+      }
+      g.uvs.push(0, 0,  0, 1,  1, 1,  1, 0);
+      g.indices.push(g.offset, g.offset + 1, g.offset + 2, g.offset, g.offset + 2, g.offset + 3);
+      g.offset += 4;
+    }
+  }
+}
+}
+
+for (const [texKey, g] of Object.entries(subGeoms)) {
+if (g.positions.length === 0) continue;
+const texObj = TextureFactory.createCanvasTexture(texKey);
+
+const geom = new THREE.BufferGeometry();
+geom.setAttribute('position', new THREE.Float32BufferAttribute(g.positions, 3));
+geom.setAttribute('normal', new THREE.Float32BufferAttribute(g.normals, 3));
+geom.setAttribute('uv', new THREE.Float32BufferAttribute(g.uvs, 2));
+geom.setIndex(g.indices);
+
+const mat = new THREE.MeshLambertMaterial({
+  map: texObj.texture,
+  transparent: g.isTrans,
+  opacity: (g.blockId === BLOCK.PORTAL) ? 0.75 : (g.blockId === BLOCK.GLASS) ? 0.55 : 1.0,
+  depthWrite: !g.isTrans
+});
+
+const mesh = new THREE.Mesh(geom, mat);
+chunkGroup.add(mesh);
+}
+
+chunk.group = chunkGroup;
+scene.add(chunkGroup);
+}
+
+function updateWorldChunks(px, pz) {
+const currentChunkX = Math.floor(px / CHUNK_SIZE);
+const currentChunkZ = Math.floor(pz / CHUNK_SIZE);
+
+for (let dx = -RENDER_DISTANCE; dx <= RENDER_DISTANCE; dx++) {
+for (let dz = -RENDER_DISTANCE; dz <= RENDER_DISTANCE; dz++) {
+const cx = currentChunkX + dx, cz = currentChunkZ + dz;
+const k = chunkKey(cx, cz);
+if (!chunks.has(k)) {
+const data = generateChunkData(cx, cz);
+chunks.set(k, { data, group: null });
+rebuildChunkMesh(cx, cz);
+}
+}
+}
+}
+
+// ==========================================
+// 3. THREE.JS SCENE SETUP
+// ==========================================
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 25, 80);
+
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 150);
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+const sun = new THREE.DirectionalLight(0xffffff, 0.95);
+sun.position.set(40, 70, 30);
+scene.add(sun);
+const ambientLight = new THREE.AmbientLight(0x737373);
+scene.add(ambientLight);
+
+const muzzleFlashLight = new THREE.PointLight(0xfef08a, 0, 8);
+scene.add(muzzleFlashLight);
+
+updateWorldChunks(0, 0);
+
+function findHighestSurfaceBlock(wx, wz) {
+for (let y = CHUNK_HEIGHT - 1; y >= 0; y--) {
+if (isSolid(wx, y, wz)) return y;
+}
+return 15;
+}
+const spawnY = findHighestSurfaceBlock(0, 0) + 2.5;
+
+// ==========================================
+// 4. PLAYER STATE, FLIGHT & INVENTORY
+// ==========================================
+let currentDimension = 'Overworld';
+let isCreativeMode = false;
+let isFlying = false;
+let lastSpacePressTime = 0;
+let isTradeOpen = false;
+let isChestOpen = false;
+let isInventoryOpen = false;
+let isFurnaceOpen = false;
+let isLocked = false;
+
+const player = {
+pos: new THREE.Vector3(0.5, spawnY, 0.5),
+vel: new THREE.Vector3(),
+yaw: 0, pitch: 0,
+onGround: false,
+isInWater: false,
+coyoteTimer: 0,
+jumpBufferTimer: 0,
+health: 100,
+timeSinceDamaged: 10,
+width: 0.5,
+standingHeight: 1.75,
+crouchHeight: 1.25,
+isCrouching: false,
+isSprinting: false
+};
+
+const hotbar = Array(9).fill(null).map(() => ({ item: null, count: 0 }));
+const inventory = Array(27).fill(null).map(() => ({ item: null, count: 0 }));
+const armorSlots = Array(4).fill(null).map(() => ({ item: null, count: 0 }));
+const craftingGrid = Array(9).fill(null).map(() => ({ item: null, count: 0 }));
+let activeCraftResult = null;
+
+// Initial setup with guns, ammo, and survival gear
+hotbar[0] = { item: 'pistol', count: 1 };
+hotbar[1] = { item: 'shotgun', count: 1 };
+hotbar[2] = { item: 'rifle', count: 1 };
+hotbar[3] = { item: 'sniper', count: 1 };
+hotbar[4] = { item: 'pickaxe', count: 1 };
+hotbar[5] = { item: 'ammo_pistol', count: 64 };
+hotbar[6] = { item: 'ammo_shotgun', count: 32 };
+hotbar[7] = { item: 'ammo_rifle', count: 64 };
+hotbar[8] = { item: 'emerald', count: 8 };
+inventory[0] = { item: 'ender_pearl', count: 16 };
+inventory[1] = { item: 'gunpowder', count: 16 };
+inventory[2] = { item: 'iron_ingot', count: 24 };
+
+let selectedSlot = 0;
+let draggedSlot = null;
+const dragGhost = document.getElementById('drag-ghost');
+const ghostCanvas = document.getElementById('ghost-canvas');
+const ghostCount = document.getElementById('ghost-count');
+
+const ALL_CREATIVE_ITEMS = [
+'pistol', 'shotgun', 'rifle', 'sniper', 'dragon_tool',
+'ammo_pistol', 'ammo_shotgun', 'ammo_rifle', 'gunpowder', 'emerald', 'ender_pearl',
+'sword_wood', 'sword_stone', 'pickaxe', 'flint_and_steel',
+'bucket', 'water_bucket', 'lava_bucket', 'blaze_rod', 'eye_of_ender',
+'dirt', 'stone', 'wood', 'planks', 'leaves', 'sand', 'cactus',
+'glass', 'coal_ore', 'iron_ore', 'diamond_ore', 'obsidian', 'bedrock',
+'nether_brick', 'end_stone', 'end_portal_frame', 'bed', 'furnace', 'chest', 'crafting_table',
+'diamond', 'iron_ingot', 'coal', 'leather',
+'helmet_leather', 'chest_leather', 'legs_leather', 'boots_leather',
+'helmet_iron', 'chest_iron', 'legs_iron', 'boots_iron',
+'helmet_diamond', 'chest_diamond', 'legs_diamond', 'boots_diamond'
+];
+
+const RECIPES = [
+{ name: "Oak Planks (x4)", output: 'planks', count: 4, pattern: [ ['wood'] ] },
+{ name: "Sticks (x4)", output: 'stick', count: 4, pattern: [ ['planks'], ['planks'] ] },
+{ name: "Tactical Pistol", output: 'pistol', count: 1, pattern: [
+['iron_ingot', 'iron_ingot'],
+['iron_ingot', 'flint_and_steel'],
+[null, 'iron_ingot']
+]
+},
+{ name: "Pump Shotgun", output: 'shotgun', count: 1, pattern: [
+['iron_ingot', 'iron_ingot', 'iron_ingot'],
+['wood', 'iron_ingot', null],
+['wood', null, null]
+]
+},
+{ name: "Pistol Ammo (x16)", output: 'ammo_pistol', count: 16, pattern: [
+['iron_ingot'],
+['gunpowder']
+]
+},
+{ name: "Shotgun Shells (x8)", output: 'ammo_shotgun', count: 8, pattern: [
+['iron_ingot', 'gunpowder'],
+['gunpowder', 'planks']
+]
+},
+{ name: "Rifle Ammo (x32)", output: 'ammo_rifle', count: 32, pattern: [
+['iron_ingot', 'gunpowder'],
+['iron_ingot', 'gunpowder']
+]
+},
+{ name: "Eye of Ender", output: 'eye_of_ender', count: 1, pattern: [ ['blaze_rod', 'diamond'] ] },
+{ name: "Iron Bucket", output: 'bucket', count: 1, pattern: [ ['iron_ingot', null, 'iron_ingot'], [null, 'iron_ingot', null] ] },
+{ name: "Stone Pickaxe", output: 'pickaxe', count: 1, pattern: [ ['stone', 'stone', 'stone'], [null, 'stick', null], [null, 'stick', null] ] },
+{ name: "Bed", output: 'bed', count: 1, pattern: [ ['leaves', 'leaves', 'leaves'], ['planks', 'planks', 'planks'] ] },
+{ name: "Furnace", output: 'furnace', count: 1, pattern: [ ['stone', 'stone', 'stone'], ['stone', null, 'stone'], ['stone', 'stone', 'stone'] ] },
+{ name: "Chest", output: 'chest', count: 1, pattern: [ ['planks', 'planks', 'planks'], ['planks', null, 'planks'], ['planks', 'planks', 'planks'] ] },
+{ name: "Crafting Table", output: 'crafting_table', count: 1, pattern: [ ['planks', 'planks'], ['planks', 'planks'] ] }
+];
+
+function calculatePlayerDefense() {
+if (isCreativeMode) return 1.0;
+let def = 0;
+armorSlots.forEach(s => {
+if (s.item && ARMOR_STATS[s.item]) def += ARMOR_STATS[s.item];
+});
+return Math.min(0.80, def);
+}
+
+function updateArmorHUD() {
+const def = calculatePlayerDefense();
+const pct = Math.round(def * 100);
+document.getElementById('armor-val').textContent = isCreativeMode ? '100% (CREATIVE)' : ${pct}%;
+document.getElementById('armor-bar-fill').style.width = ${pct}%;
+}
+
+function updateAmmoHUD() {
+const heldItem = hotbar[selectedSlot].item;
+const ammoContainer = document.getElementById('ammo-hud');
+
+if (GUN_STATS[heldItem]) {
+ammoContainer.style.display = 'block';
+const gun = GUN_STATS[heldItem];
+const clip = gunMagState[heldItem];
+const reserve = countItemInInventory(gun.ammoType);
+
+if (isReloading) {
+  document.getElementById('ammo-clip').textContent = "RELOADING...";
+  document.getElementById('ammo-reserve').textContent = reserve;
+} else {
+  document.getElementById('ammo-clip').textContent = clip;
+  document.getElementById('ammo-reserve').textContent = reserve;
+}
+} else {
+ammoContainer.style.display = 'none';
+}
+}
+
+function countItemInInventory(itemKey) {
+let count = 0;
+hotbar.concat(inventory).forEach(s => {
+if (s.item === itemKey) count += s.count;
+});
+return count;
+}
+
+function renderSlotElement(el, slotData, defaultLabel = '') {
+el.innerHTML = '';
+if (slotData && slotData.item && slotData.count > 0) {
+const texObj = TextureFactory.createCanvasTexture(slotData.item);
+const canvas = document.createElement('canvas');
+canvas.className = 'slot-icon-canvas';
+canvas.width = 16; canvas.height = 16;
+const ctx = canvas.getContext('2d');
+ctx.drawImage(texObj.canvas, 0, 0);
+el.appendChild(canvas);
+
+if (slotData.count > 1) {
+  const count = document.createElement('span');
+  count.className = 'count';
+  count.textContent = slotData.count;
+  el.appendChild(count);
+}
+} else if (defaultLabel) {
+const label = document.createElement('span');
+label.className = 'slot-label';
+label.textContent = defaultLabel;
+el.appendChild(label);
+}
+}
+
+function bindDragHandlers(el, type, index) {
+el.onmousedown = (e) => {
+if (e.button !== 0) return;
+const targetArr = (type === 'inv') ? inventory : (type === 'craft') ? craftingGrid : (type === 'armor') ? armorSlots : hotbar;
+const slot = targetArr[index];
+if (slot && slot.item && slot.count > 0) {
+draggedSlot = { type, index, data: { ...slot } };
+const texObj = TextureFactory.createCanvasTexture(slot.item);
+const gctx = ghostCanvas.getContext('2d');
+gctx.clearRect(0, 0, 16, 16);
+gctx.drawImage(texObj.canvas, 0, 0);
+
+  ghostCount.textContent = slot.count > 1 ? slot.count : '';
+  dragGhost.style.display = 'flex';
+  dragGhost.style.left = e.clientX + 'px';
+  dragGhost.style.top = e.clientY + 'px';
+}
+};
+
+el.onmouseenter = () => { if (draggedSlot) el.classList.add('drag-over'); };
+el.onmouseleave = () => { el.classList.remove('drag-over'); };
+
+el.onmouseup = () => {
+if (!draggedSlot) return;
+el.classList.remove('drag-over');
+
+if (type === 'armor') {
+  const prefixes = ['helmet', 'chest', 'legs', 'boots'];
+  if (!draggedSlot.data.item.startsWith(prefixes[index])) {
+    draggedSlot = null;
+    dragGhost.style.display = 'none';
+    return;
+  }
+}
+
+const sourceArr = (draggedSlot.type === 'inv') ? inventory : (draggedSlot.type === 'craft') ? craftingGrid : (draggedSlot.type === 'armor') ? armorSlots : hotbar;
+const destArr = (type === 'inv') ? inventory : (type === 'craft') ? craftingGrid : (type === 'armor') ? armorSlots : hotbar;
+
+const sourceData = sourceArr[draggedSlot.index];
+const destData = destArr[index];
+
+if (draggedSlot.type === type && draggedSlot.index === index) {
+} else if (destData.item === sourceData.item && destData.count + sourceData.count <= 64) {
+  destData.count += sourceData.count;
+  sourceArr[draggedSlot.index] = { item: null, count: 0 };
+} else {
+  const temp = { ...destData };
+  destArr[index] = { ...sourceData };
+  sourceArr[draggedSlot.index] = temp;
+}
+
+draggedSlot = null;
+dragGhost.style.display = 'none';
+renderAllGrids();
+updateArmorHUD();
+updateAmmoHUD();
+};
+}
+
+window.addEventListener('mousemove', (e) => {
+if (draggedSlot) {
+dragGhost.style.left = e.clientX + 'px';
+dragGhost.style.top = e.clientY + 'px';
+}
+});
+
+window.addEventListener('mouseup', () => {
+if (draggedSlot) {
+draggedSlot = null;
+dragGhost.style.display = 'none';
+document.querySelectorAll('.slot').forEach(s => s.classList.remove('drag-over'));
+}
+});
+
+function renderHotbar() {
+const barEl = document.getElementById('hotbar');
+barEl.innerHTML = '';
+hotbar.forEach((slot, i) => {
+const el = document.createElement('div');
+el.className = slot ${i === selectedSlot ? 'active' : ''};
+el.onclick = () => selectSlot(i);
+renderSlotElement(el, slot);
+barEl.appendChild(el);
+});
+const cur = hotbar[selectedSlot].item || 'fists';
+document.getElementById('held-item-label').textContent = cur.toUpperCase();
+updateAmmoHUD();
+}
+
+function renderAllGrids() {
+const labels = ['HELM', 'CHEST', 'LEGS', 'BOOTS'];
+for (let i = 0; i < 4; i++) {
+const el = document.getElementById(armor-slot-${i});
+bindDragHandlers(el, 'armor', i);
+renderSlotElement(el, armorSlots[i], labels[i]);
+}
+
+const invCont = document.getElementById('inv-grid-container');
+invCont.innerHTML = '';
+inventory.forEach((slot, i) => {
+const el = document.createElement('div');
+el.className = 'slot';
+bindDragHandlers(el, 'inv', i);
+renderSlotElement(el, slot);
+invCont.appendChild(el);
+});
+
+const craftCont = document.getElementById('crafting-grid');
+craftCont.innerHTML = '';
+craftingGrid.forEach((slot, i) => {
+const el = document.createElement('div');
+el.className = 'slot';
+bindDragHandlers(el, 'craft', i);
+renderSlotElement(el, slot);
+craftCont.appendChild(el);
+});
+
+const modalHotbar = document.getElementById('modal-hotbar-container');
+modalHotbar.innerHTML = '';
+hotbar.forEach((slot, i) => {
+const el = document.createElement('div');
+el.className = slot ${i === selectedSlot ? 'active' : ''};
+bindDragHandlers(el, 'hotbar', i);
+renderSlotElement(el, slot);
+modalHotbar.appendChild(el);
+});
+
+renderHotbar();
+evaluateCraftingRecipe();
+updateArmorHUD();
+}
+
+function filterCreativeCatalog() {
+const query = document.getElementById('creative-search-bar').value.toLowerCase().trim();
+const catalog = document.getElementById('creative-catalog');
+catalog.innerHTML = '';
+
+ALL_CREATIVE_ITEMS.filter(it => it.toLowerCase().includes(query)).forEach(itemKey => {
+const el = document.createElement('div');
+el.className = 'slot';
+renderSlotElement(el, { item: itemKey, count: 64 });
+el.onclick = () => addItemToInventory(itemKey, 64);
+catalog.appendChild(el);
+});
+}
+
+function renderRecipeBook() {
+const list = document.getElementById('recipe-list');
+list.innerHTML = '';
+
+RECIPES.forEach(rec => {
+const card = document.createElement('div');
+card.className = 'recipe-card';
+
+const header = document.createElement('div');
+header.className = 'recipe-header';
+header.innerHTML = `<span>${rec.name}</span>`;
+card.appendChild(header);
+
+const miniGrid = document.createElement('div');
+miniGrid.className = 'recipe-mini-grid';
+
+for (let r = 0; r < 3; r++) {
+  for (let c = 0; c < 3; c++) {
+    const cell = document.createElement('div');
+    cell.className = 'mini-cell';
+    if (rec.pattern[r] && rec.pattern[r][c]) {
+      const itemKey = rec.pattern[r][c];
+      const texObj = TextureFactory.createCanvasTexture(itemKey);
+      cell.style.backgroundImage = `url(${texObj.canvas.toDataURL()})`;
+      cell.style.backgroundSize = 'cover';
+    }
+    miniGrid.appendChild(cell);
+  }
+}
+card.appendChild(miniGrid);
+
+const btn = document.createElement('button');
+btn.className = 'auto-fill-btn';
+btn.textContent = 'Auto-Fill';
+btn.onclick = () => autoFillRecipe(rec);
+card.appendChild(btn);
+
+list.appendChild(card);
+});
+}
+
+function autoFillRecipe(rec) {
+for (let i = 0; i < 9; i++) {
+if (craftingGrid[i].item) {
+addItemToInventory(craftingGrid[i].item, craftingGrid[i].count);
+craftingGrid[i] = { item: null, count: 0 };
+}
+}
+
+const required = {};
+for (let r = 0; r < rec.pattern.length; r++) {
+for (let c = 0; c < rec.pattern[r].length; c++) {
+const it = rec.pattern[r][c];
+if (it) required[it] = (required[it] || 0) + 1;
+}
+}
+
+const available = {};
+inventory.forEach(s => { if (s.item) available[s.item] = (available[s.item] || 0) + s.count; });
+hotbar.forEach(s => { if (s.item) available[s.item] = (available[s.item] || 0) + s.count; });
+
+if (!isCreativeMode) {
+for (const [k, count] of Object.entries(required)) {
+if ((available[k] || 0) < count) {
+alert(Missing ingredients for ${rec.name}! Need ${count} ${k}.);
+renderAllGrids();
+return;
+}
+}
+}
+
+for (let r = 0; r < rec.pattern.length; r++) {
+for (let c = 0; c < rec.pattern[r].length; c++) {
+const it = rec.pattern[r][c];
+if (it) {
+if (!isCreativeMode) deductItem(it, 1);
+craftingGrid[r * 3 + c] = { item: it, count: 1 };
+}
+}
+}
+renderAllGrids();
+}
+
+function deductItem(itemKey, amount) {
+let needed = amount;
+for (const s of inventory) {
+if (s.item === itemKey && needed > 0) {
+const take = Math.min(s.count, needed);
+s.count -= take; needed -= take;
+if (s.count <= 0) s.item = null;
+}
+}
+for (const s of hotbar) {
+if (s.item === itemKey && needed > 0) {
+const take = Math.min(s.count, needed);
+s.count -= take; needed -= take;
+if (s.count <= 0) s.item = null;
+}
+}
+}
+
+function evaluateCraftingRecipe() {
+const resultSlot = document.getElementById('craft-result-slot');
+activeCraftResult = null;
+
+let minR = 3, maxR = -1, minC = 3, maxC = -1;
+for (let r = 0; r < 3; r++) {
+for (let c = 0; c < 3; c++) {
+if (craftingGrid[r * 3 + c].item) {
+minR = Math.min(minR, r); maxR = Math.max(maxR, r);
+minC = Math.min(minC, c); maxC = Math.max(maxC, c);
+}
+}
+}
+
+if (maxR === -1) {
+renderSlotElement(resultSlot, null);
+return;
+}
+
+const h = maxR - minR + 1, w = maxC - minC + 1;
+
+for (const rec of RECIPES) {
+if (rec.pattern.length === h && rec.pattern[0].length === w) {
+let match = true;
+for (let r = 0; r < h; r++) {
+for (let c = 0; c < w; c++) {
+const expected = rec.pattern[r][c];
+const actual = craftingGrid[(minR + r) * 3 + (minC + c)].item;
+if (expected !== actual) { match = false; break; }
+}
+if (!match) break;
+}
+if (match) {
+activeCraftResult = { item: rec.output, count: rec.count };
+renderSlotElement(resultSlot, activeCraftResult);
+return;
+}
+}
+}
+renderSlotElement(resultSlot, null);
+}
+
+function claimCraftedItem() {
+if (!activeCraftResult) return;
+addItemToInventory(activeCraftResult.item, activeCraftResult.count);
+
+craftingGrid.forEach(slot => {
+if (slot.item) {
+slot.count--;
+if (slot.count <= 0) slot.item = null;
+}
+});
+
+renderAllGrids();
+}
+
+function addItemToInventory(itemKey, count = 1) {
+let left = count;
+for (const s of hotbar) {
+if (s.item === itemKey && s.count < 64) {
+const add = Math.min(64 - s.count, left);
+s.count += add; left -= add;
+if (left <= 0) { renderAllGrids(); return; }
+}
+}
+for (let i = 0; i < hotbar.length; i++) {
+if (!hotbar[i].item) {
+const add = Math.min(64, left);
+hotbar[i] = { item: itemKey, count: add }; left -= add;
+if (left <= 0) { renderAllGrids(); return; }
+}
+}
+for (const s of inventory) {
+if (s.item === itemKey && s.count < 64) {
+const add = Math.min(64 - s.count, left);
+s.count += add; left -= add;
+if (left <= 0) { renderAllGrids(); return; }
+}
+}
+for (let i = 0; i < inventory.length; i++) {
+if (!inventory[i].item) {
+const add = Math.min(64, left);
+inventory[i] = { item: itemKey, count: add }; left -= add;
+if (left <= 0) { renderAllGrids(); return; }
+}
+}
+renderAllGrids();
+}
+
+function selectSlot(i) {
+selectedSlot = i;
+renderHotbar();
+if (isAimingDownSights) exitADS();
+}
+
+function toggleInventory() {
+const modal = document.getElementById('inventory-modal');
+isInventoryOpen = !isInventoryOpen;
+
+if (isInventoryOpen) {
+modal.style.display = 'block';
+blocker.style.display = 'none';
+document.exitPointerLock();
+
+document.getElementById('creative-panel').style.display = isCreativeMode ? 'block' : 'none';
+document.getElementById('inv-title').textContent = isCreativeMode ? 'CREATIVE FIREARMS & ITEM SEARCH' : 'ARMOR, 3x3 BENCH & STORAGE';
+if (isCreativeMode) filterCreativeCatalog();
+
+renderAllGrids();
+renderRecipeBook();
+} else {
+modal.style.display = 'none';
+renderer.domElement.requestPointerLock();
+}
+}
+
+function toggleCreativeMode() {
+isCreativeMode = !isCreativeMode;
+if (!isCreativeMode) isFlying = false;
+document.getElementById('hud-mode').textContent = isCreativeMode ? 'Creative' : 'Survival';
+document.getElementById('hud-mode').style.color = isCreativeMode ? '#c084fc' : '#4ade80';
+document.getElementById('hud-flight').textContent = isFlying ? 'ON' : 'OFF';
+document.getElementById('hud-flight').style.color = isFlying ? '#38bdf8' : '#94a3b8';
+updateArmorHUD();
+}
+
+function reloadGun() {
+const held = hotbar[selectedSlot].item;
+if (!GUN_STATS[held] || isReloading) return;
+
+const gun = GUN_STATS[held];
+const curMag = gunMagState[held];
+if (curMag >= gun.magSize) return;
+
+const reserve = countItemInInventory(gun.ammoType);
+if (reserve <= 0 && !isCreativeMode) return;
+
+isReloading = true;
+reloadTimer = gun.reloadTime;
+updateAmmoHUD();
+}
+
+function updateReload(dt) {
+if (!isReloading) return;
+reloadTimer -= dt;
+
+if (reloadTimer <= 0) {
+isReloading = false;
+const held = hotbar[selectedSlot].item;
+if (GUN_STATS[held]) {
+const gun = GUN_STATS[held];
+const needed = gun.magSize - gunMagState[held];
+const reserve = countItemInInventory(gun.ammoType);
+
+  if (isCreativeMode) {
+    gunMagState[held] = gun.magSize;
+  } else {
+    const load = Math.min(needed, reserve);
+    deductItem(gun.ammoType, load);
+    gunMagState[held] += load;
+  }
+}
+renderHotbar();
+updateAmmoHUD();
+}
+}
+
+// --- FURNACE SYSTEM & SMELTING ---
+const furnaceData = { input: null, fuel: null, output: null };
+
+function openFurnaceUI() {
+isFurnaceOpen = true;
+document.getElementById('furnace-modal').style.display = 'block';
+blocker.style.display = 'none';
+document.exitPointerLock();
+updateFurnaceSlots();
+}
+
+function closeFurnaceUI() {
+isFurnaceOpen = false;
+document.getElementById('furnace-modal').style.display = 'none';
+renderer.domElement.requestPointerLock();
+}
+
+function updateFurnaceSlots() {
+renderSlotElement(document.getElementById('furnace-input'), furnaceData.input);
+renderSlotElement(document.getElementById('furnace-fuel'), furnaceData.fuel);
+renderSlotElement(document.getElementById('furnace-output'), furnaceData.output);
+}
+
+function smeltItem() {
+let hasSand = false, hasCoal = false;
+inventory.concat(hotbar).forEach(s => {
+if (s.item === 'sand' && s.count > 0) hasSand = true;
+if (s.item === 'coal' && s.count > 0) hasCoal = true;
+});
+
+if (hasSand && hasCoal || isCreativeMode) {
+if (!isCreativeMode) {
+deductItem('sand', 1);
+deductItem('coal', 1);
+}
+addItemToInventory('glass', 1);
+furnaceData.output = { item: 'glass', count: (furnaceData.output?.count || 0) + 1 };
+updateFurnaceSlots();
+} else {
+alert("You need at least 1 Sand and 1 Coal in your inventory to smelt Glass!");
+}
+}
+
+function claimFurnaceOutput() {
+if (furnaceData.output) {
+furnaceData.output = null;
+updateFurnaceSlots();
+}
+}
+
+// --- CHEST & VILLAGER UI LOGIC ---
+const VILLAGER_TRADES = [
+{ give: { item: 'wood', count: 4 }, get: { item: 'emerald', count: 1 }, desc: "4 Wood ➔ 1 Emerald" },
+{ give: { item: 'emerald', count: 1 }, get: { item: 'ammo_pistol', count: 16 }, desc: "1 Emerald ➔ 16 Pistol Ammo" },
+{ give: { item: 'emerald', count: 2 }, get: { item: 'ammo_shotgun', count: 8 }, desc: "2 Emeralds ➔ 8 Shotgun Shells" },
+{ give: { item: 'emerald', count: 2 }, get: { item: 'ammo_rifle', count: 24 }, desc: "2 Emeralds ➔ 24 Rifle Ammo" },
+{ give: { item: 'emerald', count: 3 }, get: { item: 'ender_pearl', count: 2 }, desc: "3 Emeralds ➔ 2 Ender Pearls" },
+{ give: { item: 'emerald', count: 4 }, get: { item: 'diamond', count: 1 }, desc: "4 Emeralds ➔ 1 Diamond" }
+];
+
+const CHEST_LOOT_TABLE = [
+{ item: 'iron_ingot', count: 4 },
+{ item: 'emerald', count: 3 },
+{ item: 'ammo_pistol', count: 16 },
+{ item: 'ammo_shotgun', count: 8 },
+{ item: 'leather', count: 6 },
+{ item: 'ender_pearl', count: 2 },
+{ item: 'coal', count: 8 }
+];
+
+let activeChestLoot = [];
+
+function openChestUI() {
+isChestOpen = true;
+document.getElementById('chest-modal').style.display = 'block';
+blocker.style.display = 'none';
+document.exitPointerLock();
+
+activeChestLoot = Array(9).fill(null).map(() => {
+if (Math.random() > 0.3) {
+const loot = CHEST_LOOT_TABLE[Math.floor(Math.random() * CHEST_LOOT_TABLE.length)];
+return { item: loot.item, count: loot.count };
+}
+return { item: null, count: 0 };
+});
+
+renderChestSlots();
+}
+
+function closeChestUI() {
+isChestOpen = false;
+document.getElementById('chest-modal').style.display = 'none';
+renderer.domElement.requestPointerLock();
+}
+
+function renderChestSlots() {
+const container = document.getElementById('chest-grid-container');
+container.innerHTML = '';
+
+activeChestLoot.forEach((slot, idx) => {
+const el = document.createElement('div');
+el.className = 'slot';
+renderSlotElement(el, slot);
+
+el.onclick = () => {
+  if (slot.item) {
+    addItemToInventory(slot.item, slot.count);
+    activeChestLoot[idx] = { item: null, count: 0 };
+    renderChestSlots();
+  }
+};
+container.appendChild(el);
+});
+}
+
+function openTradeUI() {
+isTradeOpen = true;
+document.getElementById('trade-modal').style.display = 'block';
+blocker.style.display = 'none';
+document.exitPointerLock();
+
+const container = document.getElementById('trade-list');
+container.innerHTML = '';
+
+VILLAGER_TRADES.forEach((t, idx) => {
+const row = document.createElement('div');
+row.className = 'trade-row';
+row.innerHTML = <div style="font-weight: bold; color: #facc15;">${t.desc}</div> <button class="trade-btn" style="margin-left: auto;" onclick="executeTrade(${idx})">TRADE</button>;
+container.appendChild(row);
+});
+}
+
+function closeTradeUI() {
+isTradeOpen = false;
+document.getElementById('trade-modal').style.display = 'none';
+renderer.domElement.requestPointerLock();
+}
+
+function executeTrade(tradeIdx) {
+const t = VILLAGER_TRADES[tradeIdx];
+const playerHas = countItemInInventory(t.give.item);
+
+if (playerHas >= t.give.count || isCreativeMode) {
+if (!isCreativeMode) deductItem(t.give.item, t.give.count);
+addItemToInventory(t.get.item, t.get.count);
+renderAllGrids();
+updateAmmoHUD();
+} else {
+alert(You do not have enough ${t.give.item.replace('_',' ')} to complete this trade!);
+}
+}
+
+// --- MOBS, VILLAGERS & BOSSES ---
+const mobs = [];
+let enderDragon = null;
+let healingCrystalsRemaining = 12;
+
+function breakHealingCrystal(x, y, z) {
+healingCrystalsRemaining = Math.max(0, healingCrystalsRemaining - 1);
+document.getElementById('crystal-count').textContent = healingCrystalsRemaining;
+triggerCreeperExplosion(new THREE.Vector3(x, y, z));
+}
+
+function createMobMesh(type) {
+if (type === 'zombie') return new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.8, 0.7), new THREE.MeshLambertMaterial({ color: 0x1b4332 }));
+if (type === 'spider') return new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.6, 1.2), new THREE.MeshLambertMaterial({ color: 0x3f1d38 }));
+if (type === 'creeper') return new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.7, 0.6), new THREE.MeshLambertMaterial({ color: 0x22c55e }));
+if (type === 'cow') return new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.2, 1.4), new THREE.MeshLambertMaterial({ color: 0x5c4033 }));
+
+if (type === 'villager') {
+const group = new THREE.Group();
+const body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.3, 0.6), new THREE.MeshLambertMaterial({ color: 0x78350f }));
+body.position.y = 0.65; group.add(body);
+const head = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.7, 0.6), new THREE.MeshLambertMaterial({ color: 0xe2b78f }));
+head.position.y = 1.5;
+const nose = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.35, 0.2), new THREE.MeshLambertMaterial({ color: 0xd49b6f }));
+nose.position.set(0, -0.1, -0.35); head.add(nose);
+group.add(head);
+return group;
+}
+
+if (type === 'iron_golem') {
+const group = new THREE.Group();
+const chest = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.2, 0.8), new THREE.MeshLambertMaterial({ color: 0xd1d5db }));
+chest.position.y = 1.5; group.add(chest);
+const waist = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.6), new THREE.MeshLambertMaterial({ color: 0x9ca3af }));
+waist.position.y = 0.65; group.add(waist);
+const head = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.7), new THREE.MeshLambertMaterial({ color: 0xe5e7eb }));
+head.position.y = 2.4;
+const eye = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.15, 0.15), new THREE.MeshBasicMaterial({ color: 0xdc2626 }));
+eye.position.set(0, 0.05, 0.35); head.add(eye);
+group.add(head);
+const armL = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1.8, 0.4), new THREE.MeshLambertMaterial({ color: 0xd1d5db }));
+armL.position.set(-1.0, 1.2, 0);
+const armR = armL.clone();
+armR.position.set(1.0, 1.2, 0);
+group.add(armL); group.add(armR);
+return group;
+}
+
+if (type === 'blaze') {
+const group = new THREE.Group();
+const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), new THREE.MeshBasicMaterial({ color: 0xfacc15 }));
+group.add(head);
+for (let r = 0; r < 4; r++) {
+const rod = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.6, 0.12), new THREE.MeshBasicMaterial({ color: 0xea580c }));
+rod.position.set(Math.cos(r * 1.57) * 0.45, -0.4, Math.sin(r * 1.57) * 0.45);
+group.add(rod);
+}
+return group;
+}
+
+if (type === 'dragon') {
+const dragonGroup = new THREE.Group();
+const body = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.8, 4.5), new THREE.MeshLambertMaterial({ color: 0x18181b }));
+dragonGroup.add(body);
+const head = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.2, 1.8), new THREE.MeshLambertMaterial({ color: 0x18181b }));
+head.position.set(0, 0.4, -2.8);
+const eyeL = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), new THREE.MeshBasicMaterial({ color: 0xd946ef }));
+const eyeR = eyeL.clone();
+eyeL.position.set(-0.6, 0.2, -0.8);
+eyeR.position.set(0.6, 0.2, -0.8);
+head.add(eyeL); head.add(eyeR);
+dragonGroup.add(head);
+const wingL = new THREE.Mesh(new THREE.BoxGeometry(4.5, 0.2, 2.2), new THREE.MeshLambertMaterial({ color: 0x2e1065 }));
+wingL.position.set(-3.2, 0.6, 0);
+const wingR = wingL.clone();
+wingR.position.set(3.2, 0.6, 0);
+dragonGroup.add(wingL); dragonGroup.add(wingR);
+return dragonGroup;
+}
+}
+
+function spawnMob(type, x, y, z) {
+const mesh = createMobMesh(type);
+scene.add(mesh);
+
+const hp = (type === 'dragon') ? 200 : (type === 'iron_golem') ? 100 : (type === 'cow' || type === 'villager') ? 6 : (type === 'blaze') ? 8 : 6;
+const width = (type === 'dragon') ? 5.0 : (type === 'iron_golem') ? 1.4 : (type === 'spider') ? 1.2 : 0.7;
+const height = (type === 'dragon') ? 2.5 : (type === 'iron_golem') ? 2.7 : (type === 'spider') ? 0.6 : 1.8;
+
+const mobObj = {
+type, mesh, pos: new THREE.Vector3(x, y, z),
+vel: new THREE.Vector3(), hp, maxHp: hp, width, height,
+attackCooldown: 0, hitFlashTimer: 0, fuse: 0,
+shootTimer: 0, angle: 0
+};
+mobs.push(mobObj);
+return mobObj;
+}
+
+function spawnEnderDragon() {
+healingCrystalsRemaining = 12;
+document.getElementById('boss-bar-container').style.display = 'flex';
+document.getElementById('crystal-count').textContent = '12';
+document.getElementById('boss-bar-fill').style.width = '100%';
+
+enderDragon = spawnMob('dragon', 0, 24, 0);
+}
+
+function attackMob(mob) {
+if (mob.type === 'villager' || mob.type === 'iron_golem') return;
+const held = hotbar[selectedSlot].item;
+let dmg = 1.2;
+
+if (held === 'dragon_tool') dmg = 9999;
+else if (held === 'sword_wood') dmg = 2.0;
+else if (held === 'sword_stone') dmg = 3.0;
+
+mob.hp -= dmg;
+mob.hitFlashTimer = 0.2;
+SoundEngine.playHit();
+
+if (mob.type === 'dragon') {
+const pct = Math.max(0, (mob.hp / mob.maxHp) * 100);
+document.getElementById('boss-bar-fill').style.width = ${pct}%;
+}
+
+const knock = new THREE.Vector3().subVectors(mob.pos, player.pos).normalize();
+mob.vel.x += knock.x * 6;
+mob.vel.y += 3.5;
+mob.vel.z += knock.z * 6;
+
+if (mob.hp <= 0) {
+if (mob.type === 'cow') spawnDrop(mob.pos.x, mob.pos.y, mob.pos.z, 'leather');
+if (mob.type === 'creeper') spawnDrop(mob.pos.x, mob.pos.y, mob.pos.z, 'gunpowder');
+if (mob.type === 'blaze') spawnDrop(mob.pos.x, mob.pos.y, mob.pos.z, 'blaze_rod');
+if (mob.type === 'dragon') triggerDragonVictory();
+
+scene.remove(mob.mesh);
+const idx = mobs.indexOf(mob);
+if (idx !== -1) mobs.splice(idx, 1);
+}
+}
+
+// --- RECORDING & REPLAY SCENE ---
+let isRecordingEndFight = false;
+let isReplaying = false;
+const endFightRecording = [];
+let replayIndex = 0;
+
+function startEndFightRecording() {
+endFightRecording.length = 0;
+isRecordingEndFight = true;
+}
+
+function triggerDragonVictory() {
+isRecordingEndFight = false;
+document.getElementById('boss-bar-container').style.display = 'none';
+
+isReplaying = true;
+replayIndex = 0;
+document.exitPointerLock();
+document.getElementById('replay-hud').style.display = 'flex';
+}
+
+function skipReplay() {
+isReplaying = false;
+document.getElementById('replay-hud').style.display = 'none';
+grantDragonToolAndSpawn();
+}
+
+function grantDragonToolAndSpawn() {
+currentDimension = 'Overworld';
+document.getElementById('hud-dim').textContent = 'Overworld';
+document.getElementById('hud-dim').style.color = '#38bdf8';
+
+for (const chunk of chunks.values()) {
+if (chunk.group) scene.remove(chunk.group);
+}
+chunks.clear();
+
+mobs.forEach(m => scene.remove(m.mesh));
+mobs.length = 0;
+
+addItemToInventory('dragon_tool', 1);
+
+player.pos.set(0.5, spawnY, 0.5);
+updateWorldChunks(0, 0);
+
+alert("VICTORY! You defeated the Ender Dragon! The Dragon Tool has been placed in your inventory. Mob cap is now removed; hordes will swarm you!");
+}
+
+function updateMobs(dt) {
+const hasDragonTool = hotbar.concat(inventory).some(s => s.item === 'dragon_tool');
+const shouldSpawnHorde = hasDragonTool && (Math.random() < 0.08);
+const shouldSpawnNight = (currentDimension === 'Overworld' && isNight && mobs.filter(m => m.type !== 'cow' && m.type !== 'villager' && m.type !== 'iron_golem').length < 5 && Math.random() < 0.012);
+
+if (shouldSpawnHorde || shouldSpawnNight) {
+const angle = Math.random() * Math.PI * 2;
+const dist = 12 + Math.random() * 8;
+const mx = player.pos.x + Math.cos(angle) * dist;
+const mz = player.pos.z + Math.sin(angle) * dist;
+const types = ['zombie', 'spider', 'creeper'];
+const selectedType = types[Math.floor(Math.random() * types.length)];
+spawnMob(selectedType, mx, player.pos.y + 2, mz);
+}
+
+for (let i = mobs.length - 1; i >= 0; i--) {
+const mob = mobs[i];
+
+if (mob.type === 'dragon') {
+  mob.angle += 0.8 * dt;
+  mob.pos.x = Math.cos(mob.angle) * 25;
+  mob.pos.z = Math.sin(mob.angle) * 25;
+  mob.pos.y = 22 + Math.sin(mob.angle * 2.0) * 4;
+  mob.mesh.rotation.y = -mob.angle;
+
+  if (healingCrystalsRemaining > 0 && mob.hp < mob.maxHp) {
+    mob.hp = Math.min(mob.maxHp, mob.hp + 2.0 * dt);
+    const pct = (mob.hp / mob.maxHp) * 100;
+    document.getElementById('boss-bar-fill').style.width = `${pct}%`;
+  }
+
+  const distToPlayer = mob.pos.distanceTo(player.pos);
+  if (distToPlayer < 4.0) damagePlayer(35, mob.pos);
+} else if (mob.type === 'blaze') {
+  mob.pos.y += Math.sin(performance.now() * 0.003) * 0.015;
+  mob.mesh.rotation.y += 2.0 * dt;
+
+  const dist = mob.pos.distanceTo(player.pos);
+  mob.shootTimer += dt;
+  if (dist < 22 && mob.shootTimer >= 2.5) {
+    mob.shootTimer = 0;
+    const dir = new THREE.Vector3().subVectors(player.pos, mob.pos).normalize();
+    shootFireball(mob.pos.clone().add(new THREE.Vector3(0, 0.4, 0)), dir);
+  }
+} else if (mob.type === 'iron_golem') {
+  // Iron Golem Guardian AI
+  mob.vel.y -= 22 * dt;
+  mob.pos.y += mob.vel.y * dt;
+
+  const bx = Math.floor(mob.pos.x), by = Math.floor(mob.pos.y), bz = Math.floor(mob.pos.z);
+  if (isSolid(bx, by, bz)) {
+    mob.pos.y = by + 1;
+    mob.vel.y = 0;
+  }
+
+  mob.pos.x += mob.vel.x * dt;
+  mob.pos.z += mob.vel.z * dt;
+  mob.vel.x *= 0.82;
+  mob.vel.z *= 0.82;
+
+  let nearestHostile = null;
+  let minDist = 22;
+
+  for (const target of mobs) {
+    if (target.type === 'zombie' || target.type === 'creeper' || target.type === 'spider' || target.type === 'blaze') {
+      const d = mob.pos.distanceTo(target.pos);
+      if (d < minDist) {
+        minDist = d;
+        nearestHostile = target;
+      }
+    }
+  }
+
+  if (nearestHostile) {
+    const dir = new THREE.Vector2(nearestHostile.pos.x - mob.pos.x, nearestHostile.pos.z - mob.pos.z).normalize();
+    mob.pos.x += dir.x * 4.2 * dt;
+    mob.pos.z += dir.y * 4.2 * dt;
+    mob.mesh.rotation.y = Math.atan2(dir.x, dir.y);
+
+    if (minDist < 2.2) {
+      mob.attackCooldown = (mob.attackCooldown || 0) - dt;
+      if (mob.attackCooldown <= 0) {
+        mob.attackCooldown = 0.9;
+        nearestHostile.hp -= 25;
+        nearestHostile.hitFlashTimer = 0.2;
+        SoundEngine.playGolemSlam();
+
+        // High air throw
+        nearestHostile.vel.y = 14.0;
+        nearestHostile.vel.x = dir.x * 6.0;
+        nearestHostile.vel.z = dir.y * 6.0;
+
+        if (nearestHostile.hp <= 0) {
+          if (nearestHostile.type === 'creeper') spawnDrop(nearestHostile.pos.x, nearestHostile.pos.y, nearestHostile.pos.z, 'gunpowder');
+          scene.remove(nearestHostile.mesh);
+          const idx = mobs.indexOf(nearestHostile);
+          if (idx !== -1) mobs.splice(idx, 1);
+        }
+      }
+    }
+  } else {
+    if (Math.random() < 0.015) {
+      mob.vel.x += (Math.random() - 0.5) * 2;
+      mob.vel.z += (Math.random() - 0.5) * 2;
+    }
+  }
+} else {
+  mob.vel.y -= 22 * dt;
+  mob.pos.y += mob.vel.y * dt;
+
+  const bx = Math.floor(mob.pos.x), by = Math.floor(mob.pos.y), bz = Math.floor(mob.pos.z);
+  if (isSolid(bx, by, bz)) {
+    mob.pos.y = by + 1;
+    mob.vel.y = 0;
+  }
+
+  mob.pos.x += mob.vel.x * dt;
+  mob.pos.z += mob.vel.z * dt;
+  mob.vel.x *= 0.85;
+  mob.vel.z *= 0.85;
+
+  const dist = mob.pos.distanceTo(player.pos);
+  const speed = (mob.type === 'spider') ? 4.5 : (mob.type === 'cow' || mob.type === 'villager') ? 1.5 : 3.0;
+
+  if (mob.type === 'cow' || mob.type === 'villager') {
+    if (Math.random() < 0.02) {
+      mob.vel.x += (Math.random() - 0.5) * 3;
+      mob.vel.z += (Math.random() - 0.5) * 3;
+    }
+  } else if (dist > 1.2 && dist < 30) {
+    const dir = new THREE.Vector2(player.pos.x - mob.pos.x, player.pos.z - mob.pos.z).normalize();
+    mob.pos.x += dir.x * speed * dt;
+    mob.pos.z += dir.y * speed * dt;
+
+    const aheadX = Math.floor(mob.pos.x + dir.x * 0.6);
+    const aheadZ = Math.floor(mob.pos.z + dir.y * 0.6);
+    const feetY = Math.floor(mob.pos.y);
+    if (isSolid(aheadX, feetY, aheadZ) && !isSolid(aheadX, feetY + 1, aheadZ) && mob.vel.y === 0) {
+      mob.vel.y = (mob.type === 'spider') ? 8.5 : 7.0;
+    }
+  }
+
+  if (mob.type === 'creeper') {
+    if (dist < 2.5) {
+      mob.fuse += dt;
+      mob.mesh.material.color.setHex((Math.floor(mob.fuse * 8) % 2 === 0) ? 0xffffff : 0x22c55e);
+      if (mob.fuse >= 1.5) {
+        triggerCreeperExplosion(mob.pos);
+        scene.remove(mob.mesh);
+        mobs.splice(i, 1);
+        continue;
+      }
+    } else {
+      mob.fuse = Math.max(0, mob.fuse - dt);
+      mob.mesh.material.color.setHex(0x22c55e);
+    }
+  } else if (mob.type !== 'cow' && mob.type !== 'villager') {
+    mob.attackCooldown = Math.max(0, mob.attackCooldown - dt);
+    if (dist < 1.6 && mob.attackCooldown <= 0) {
+      damagePlayer(mob.type === 'spider' ? 15 : 20, mob.pos);
+      mob.attackCooldown = 1.0;
+    }
+  }
+}
+
+mob.mesh.position.set(mob.pos.x, mob.pos.y + mob.height/2, mob.pos.z);
+}
+
+const hostiles = mobs.filter(m => m.type !== 'cow' && m.type !== 'villager' && m.type !== 'iron_golem').length;
+document.getElementById('hud-mobs').textContent = Threats: ${hostiles} nearby;
+}
+
+function triggerCreeperExplosion(pos) {
+SoundEngine.playExplosion();
+const ex = Math.floor(pos.x), ey = Math.floor(pos.y), ez = Math.floor(pos.z);
+for (let x = ex - 2; x <= ex + 2; x++) {
+for (let y = ey - 2; y <= ey + 2; y++) {
+for (let z = ez - 2; z <= ez + 2; z++) {
+if (Math.hypot(x - ex, y - ey, z - ez) <= 2.2) {
+const b = getBlock(x, y, z);
+if (b !== BLOCK.AIR && b !== BLOCK.OBSIDIAN && b !== BLOCK.BEDROCK && b !== BLOCK.END_PORTAL_FRAME) {
+setBlock(x, y, z, BLOCK.AIR);
+}
+}
+}
+}
+}
+
+const pDist = player.pos.distanceTo(pos);
+if (pDist < 4.5) {
+const rawDmg = Math.floor((1 - pDist / 4.5) * 65);
+damagePlayer(rawDmg, pos);
+}
+}
+
+function damagePlayer(rawAmount, knockSource) {
+if (isCreativeMode) return;
+
+const def = calculatePlayerDefense();
+const mitigatedAmount = rawAmount * (1.0 - def);
+
+player.health = Math.max(0, player.health - mitigatedAmount);
+player.timeSinceDamaged = 0;
+SoundEngine.playHit();
+
+document.getElementById('health-bar-fill').style.width = player.health + '%';
+document.getElementById('hp-val').textContent = ${Math.ceil(player.health)}/100;
+
+if (knockSource) {
+const dir = new THREE.Vector3().subVectors(player.pos, knockSource).normalize();
+player.vel.x += dir.x * 8;
+player.vel.y += 4.5;
+player.vel.z += dir.z * 8;
+}
+
+if (player.health <= 0) {
+alert("You died! Respawning at surface...");
+player.health = 100;
+player.pos.set(0.5, spawnY, 0.5);
+player.vel.set(0, 0, 0);
+document.getElementById('health-bar-fill').style.width = '100%';
+document.getElementById('hp-val').textContent = '100/100';
+}
+}
+
+// ==========================================
+// 5. SOUND SYNTHESIS & WEAPON ATTACHMENTS
+// ==========================================
+const SoundEngine = {
+ctx: null,
+init() {
+if (!this.ctx) {
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+if (AudioCtx) this.ctx = new AudioCtx();
+}
+if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+},
+playGunshot(gunKey) {
+if (!this.ctx) return;
+const now = this.ctx.currentTime;
+const bufSize = this.ctx.sampleRate * 0.15;
+const noiseBuf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
+const output = noiseBuf.getChannelData(0);
+for (let i = 0; i < bufSize; i++) output[i] = Math.random() * 2 - 1;
+const noiseSrc = this.ctx.createBufferSource();
+noiseSrc.buffer = noiseBuf;
+
+const filter = this.ctx.createBiquadFilter();
+filter.type = 'lowpass';
+filter.frequency.setValueAtTime(gunKey === 'sniper' ? 1200 : 800, now);
+
+const gain = this.ctx.createGain();
+gain.gain.setValueAtTime(0.7, now);
+gain.gain.exponentialRampToValueAtTime(0.01, now + (gunKey === 'shotgun' ? 0.35 : 0.18));
+
+noiseSrc.connect(filter); filter.connect(gain); gain.connect(this.ctx.destination);
+noiseSrc.start(now);
+},
+playHit() {
+if (!this.ctx) return;
+const now = this.ctx.currentTime;
+const osc = this.ctx.createOscillator();
+const gain = this.ctx.createGain();
+osc.type = 'square';
+osc.frequency.setValueAtTime(140, now);
+osc.frequency.exponentialRampToValueAtTime(40, now + 0.1);
+gain.gain.setValueAtTime(0.3, now);
+gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+osc.connect(gain); gain.connect(this.ctx.destination);
+osc.start(now); osc.stop(now + 0.1);
+},
+playExplosion() {
+if (!this.ctx) return;
+const now = this.ctx.currentTime;
+const bufSize = this.ctx.sampleRate * 0.8;
+const noiseBuf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
+const output = noiseBuf.getChannelData(0);
+for (let i = 0; i < bufSize; i++) output[i] = Math.random() * 2 - 1;
+const noiseSrc = this.ctx.createBufferSource();
+noiseSrc.buffer = noiseBuf;
+
+const filter = this.ctx.createBiquadFilter();
+filter.type = 'lowpass';
+filter.frequency.setValueAtTime(450, now);
+filter.frequency.exponentialRampToValueAtTime(40, now + 0.8);
+
+const gain = this.ctx.createGain();
+gain.gain.setValueAtTime(1.0, now);
+gain.gain.exponentialRampToValueAtTime(0.01, now + 0.8);
+
+noiseSrc.connect(filter); filter.connect(gain); gain.connect(this.ctx.destination);
+noiseSrc.start(now);
+},
+playGolemSlam() {
+if (!this.ctx) return;
+const now = this.ctx.currentTime;
+const osc = this.ctx.createOscillator();
+const gain = this.ctx.createGain();
+osc.type = 'sawtooth';
+osc.frequency.setValueAtTime(180, now);
+osc.frequency.exponentialRampToValueAtTime(30, now + 0.25);
+gain.gain.setValueAtTime(0.6, now);
+gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
+osc.connect(gain); gain.connect(this.ctx.destination);
+osc.start(now); osc.stop(now + 0.25);
+},
+playTeleport() {
+if (!this.ctx) return;
+const now = this.ctx.currentTime;
+const osc = this.ctx.createOscillator();
+const gain = this.ctx.createGain();
+osc.type = 'sine';
+osc.frequency.setValueAtTime(600, now);
+osc.frequency.exponentialRampToValueAtTime(120, now + 0.2);
+gain.gain.setValueAtTime(0.4, now);
+gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+osc.connect(gain); gain.connect(this.ctx.destination);
+osc.start(now); osc.stop(now + 0.2);
+}
+};
+
+// ==========================================
+// 6. FLOATING DROPS, BULLETS & PEARLS
+// ==========================================
+const droppedItems = [];
+const itemGeom = new THREE.BoxGeometry(0.25, 0.25, 0.25);
+
+function spawnDrop(wx, wy, wz, itemKey) {
+if (!itemKey) return;
+const texObj = TextureFactory.createCanvasTexture(itemKey);
+const mat = new THREE.MeshLambertMaterial({ map: texObj.texture });
+const mesh = new THREE.Mesh(itemGeom, mat);
+mesh.position.set(wx + 0.5, wy + 0.5, wz + 0.5);
+scene.add(mesh);
+
+droppedItems.push({
+mesh, item: itemKey, pos: mesh.position,
+vel: new THREE.Vector3((Math.random() - 0.5) * 2, 3.5, (Math.random() - 0.5) * 2)
+});
+}
+
+function updateDrops(dt, playerPos) {
+for (let i = droppedItems.length - 1; i >= 0; i--) {
+const it = droppedItems[i];
+it.vel.y -= 14 * dt;
+it.pos.x += it.vel.x * dt;
+it.pos.y += it.vel.y * dt;
+it.pos.z += it.vel.z * dt;
+
+if (isSolid(Math.floor(it.pos.x), Math.floor(it.pos.y), Math.floor(it.pos.z))) {
+  it.pos.y = Math.floor(it.pos.y) + 1.12;
+  it.vel.set(0, 0, 0);
+}
+it.mesh.rotation.y += 2 * dt;
+
+if (it.pos.distanceTo(playerPos) < 2.0) {
+  it.pos.lerp(playerPos, 8 * dt);
+  if (it.pos.distanceTo(playerPos) < 0.6) {
+    addItemToInventory(it.item, 1);
+    scene.remove(it.mesh);
+    it.mesh.geometry.dispose();
+    droppedItems.splice(i, 1);
+  }
+}
+}
+}
+
+const enderPearls = [];
+const pearlGeom = new THREE.SphereGeometry(0.18, 8, 8);
+const pearlMat = new THREE.MeshBasicMaterial({ color: 0x34d399 });
+
+function throwEnderPearl() {
+SoundEngine.init();
+const dir = new THREE.Vector3(0, 0, -1)
+.applyEuler(new THREE.Euler(player.pitch, player.yaw, 0, 'YXZ'))
+.normalize();
+
+const mesh = new THREE.Mesh(pearlGeom, pearlMat);
+mesh.position.copy(camera.position).addScaledVector(dir, 0.6);
+scene.add(mesh);
+
+enderPearls.push({
+mesh, pos: mesh.position, vel: dir.multiplyScalar(24.0), lifetime: 4.0
+});
+
+if (!isCreativeMode) {
+const slot = hotbar[selectedSlot];
+slot.count--;
+if (slot.count <= 0) slot.item = null;
+renderHotbar();
+}
+}
+
+function updateEnderPearls(dt) {
+for (let i = enderPearls.length - 1; i >= 0; i--) {
+const p = enderPearls[i];
+p.vel.y -= 14.0 * dt;
+p.pos.addScaledVector(p.vel, dt);
+p.lifetime -= dt;
+
+const bx = Math.floor(p.pos.x), by = Math.floor(p.pos.y), bz = Math.floor(p.pos.z);
+if (isSolid(bx, by, bz) || p.lifetime <= 0) {
+  player.pos.set(p.pos.x, p.pos.y + 1.2, p.pos.z);
+  player.vel.set(0, 0, 0);
+  SoundEngine.playTeleport();
+
+  scene.remove(p.mesh);
+  enderPearls.splice(i, 1);
+}
+}
+}
+
+const fireballs = [];
+const fireballGeom = new THREE.SphereGeometry(0.2, 8, 8);
+const fireballMat = new THREE.MeshBasicMaterial({ color: 0xf97316 });
+
+function shootFireball(origin, dir) {
+const mesh = new THREE.Mesh(fireballGeom, fireballMat);
+mesh.position.copy(origin);
+scene.add(mesh);
+
+fireballs.push({
+mesh, pos: mesh.position, vel: dir.clone().multiplyScalar(9.0), lifetime: 5.0
+});
+}
+
+function updateFireballs(dt) {
+for (let i = fireballs.length - 1; i >= 0; i--) {
+const fb = fireballs[i];
+fb.pos.addScaledVector(fb.vel, dt);
+fb.lifetime -= dt;
+
+if (fb.pos.distanceTo(player.pos) < 1.0) {
+  damagePlayer(25, fb.pos);
+  scene.remove(fb.mesh);
+  fireballs.splice(i, 1);
+  continue;
+}
+
+if (fb.lifetime <= 0 || isSolid(Math.floor(fb.pos.x), Math.floor(fb.pos.y), Math.floor(fb.pos.z))) {
+  scene.remove(fb.mesh);
+  fireballs.splice(i, 1);
+}
+}
+}
+
+const bullets = [];
+const bulletGeom = new THREE.CylinderGeometry(0.04, 0.04, 0.5, 6);
+const bulletMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+
+function fireGun(gunKey) {
+const gun = GUN_STATS[gunKey];
+if (!gun) return;
+
+const now = performance.now() / 1000;
+if (now - lastShotTime < gun.fireRate || isReloading) return;
+
+if (gunMagState[gunKey] <= 0 && !isCreativeMode) {
+reloadGun();
+return;
+}
+
+SoundEngine.init();
+SoundEngine.playGunshot(gunKey);
+
+lastShotTime = now;
+if (!isCreativeMode) {
+gunMagState[gunKey]--;
+updateAmmoHUD();
+}
+
+player.pitch = Math.min(Math.PI / 2.05, player.pitch + gun.recoil);
+muzzleFlashLight.position.copy(camera.position);
+muzzleFlashLight.intensity = 2.5;
+
+for (let p = 0; p < gun.pellets; p++) {
+const spreadAngleX = (Math.random() - 0.5) * (isAimingDownSights ? gun.spread * 0.25 : gun.spread);
+const spreadAngleY = (Math.random() - 0.5) * (isAimingDownSights ? gun.spread * 0.25 : gun.spread);
+
+const dir = new THREE.Vector3(spreadAngleX, spreadAngleY, -1)
+  .applyEuler(new THREE.Euler(player.pitch, player.yaw, 0, 'YXZ'))
+  .normalize();
+
+const bulletMesh = new THREE.Mesh(bulletGeom, bulletMat);
+bulletMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+bulletMesh.position.copy(camera.position).addScaledVector(dir, 0.6);
+scene.add(bulletMesh);
+
+bullets.push({
+  mesh: bulletMesh,
+  pos: bulletMesh.position,
+  vel: dir.clone().multiplyScalar(gunKey === 'sniper' ? 140 : 80),
+  damage: gun.damage,
+  lifetime: 3.0
+});
+}
+}
+
+function updateBullets(dt) {
+muzzleFlashLight.intensity = Math.max(0, muzzleFlashLight.intensity - 18 * dt);
+
+for (let i = bullets.length - 1; i >= 0; i--) {
+const b = bullets[i];
+b.pos.addScaledVector(b.vel, dt);
+b.lifetime -= dt;
+
+let hitMob = null;
+for (const mob of mobs) {
+  if (mob.type === 'villager' || mob.type === 'iron_golem') continue;
+  const box = new THREE.Box3().setFromCenterAndSize(
+    new THREE.Vector3(mob.pos.x, mob.pos.y + mob.height/2, mob.pos.z),
+    new THREE.Vector3(mob.width, mob.height, mob.width)
+  );
+  if (box.containsPoint(b.pos)) { hitMob = mob; break; }
+}
+
+if (hitMob) {
+  applyGunDamageToMob(hitMob, b.damage, b.vel);
+  scene.remove(b.mesh);
+  bullets.splice(i, 1);
+  continue;
+}
+
+const vx = Math.floor(b.pos.x), vy = Math.floor(b.pos.y), vz = Math.floor(b.pos.z);
+if (isSolid(vx, vy, vz) || b.lifetime <= 0) {
+  scene.remove(b.mesh);
+  bullets.splice(i, 1);
+}
+}
+}
+
+function applyGunDamageToMob(mob, dmg, hitVelocity) {
+mob.hp -= dmg;
+mob.hitFlashTimer = 0.18;
+SoundEngine.playHit();
+
+if (mob.type === 'dragon') {
+const pct = Math.max(0, (mob.hp / mob.maxHp) * 100);
+document.getElementById('boss-bar-fill').style.width = ${pct}%;
+}
+
+const knockDir = hitVelocity.clone().normalize();
+mob.vel.x += knockDir.x * 4;
+mob.vel.y += 2.5;
+mob.vel.z += knockDir.z * 4;
+
+if (mob.hp <= 0) {
+if (mob.type === 'cow') spawnDrop(mob.pos.x, mob.pos.y, mob.pos.z, 'leather');
+if (mob.type === 'creeper') spawnDrop(mob.pos.x, mob.pos.y, mob.pos.z, 'gunpowder');
+if (mob.type === 'blaze') spawnDrop(mob.pos.x, mob.pos.y, mob.pos.z, 'blaze_rod');
+if (mob.type === 'dragon') triggerDragonVictory();
+
+scene.remove(mob.mesh);
+const idx = mobs.indexOf(mob);
+if (idx !== -1) mobs.splice(idx, 1);
+}
+}
+
+function enterADS() {
+isAimingDownSights = true;
+document.getElementById('sniper-scope').style.display = 'block';
+document.getElementById('crosshair').style.display = 'none';
+}
+function exitADS() {
+isAimingDownSights = false;
+document.getElementById('sniper-scope').style.display = 'none';
+document.getElementById('crosshair').style.display = 'block';
+}
+
+// ==========================================
+// 7. MOVEMENT, CREATIVE FLIGHT & Z DOWNWARD
+// ==========================================
+function getPlayerHeight() {
+return player.isCrouching ? player.crouchHeight : player.standingHeight;
+}
+
+function checkVoxelCollision(pos) {
+if (isCreativeMode) return false;
+const h = getPlayerHeight();
+const halfW = (player.width / 2) - 0.005;
+const minX = Math.floor(pos.x - halfW);
+const maxX = Math.floor(pos.x + halfW);
+const minY = Math.floor(pos.y - h + 0.01);
+const maxY = Math.floor(pos.y - 0.01);
+const minZ = Math.floor(pos.z - halfW);
+const maxZ = Math.floor(pos.z + halfW);
+
+for (let x = minX; x <= maxX; x++) {
+for (let y = minY; y <= maxY; y++) {
+for (let z = minZ; z <= maxZ; z++) {
+if (isSolid(x, y, z)) return true;
+}
+}
+}
+return false;
+}
+
+function resolvePlayerMovement(dt) {
+const h = getPlayerHeight();
+const halfW = player.width / 2;
+const SKIN = 0.001;
+
+const headBlock = getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y - 0.3), Math.floor(player.pos.z));
+const feetBlock = getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y - h + 0.2), Math.floor(player.pos.z));
+player.isInWater = (headBlock === BLOCK.WATER || feetBlock === BLOCK.WATER);
+
+// CREATIVE FLIGHT MODE: Space to climb, Z to descend, WASD glide
+if (isCreativeMode && isFlying) {
+const flySpeed = keys['ShiftLeft'] ? 16.0 : 10.0;
+player.pos.x += player.vel.x * 1.5 * dt;
+player.pos.z += player.vel.z * 1.5 * dt;
+
+if (keys['Space']) player.pos.y += flySpeed * dt;
+if (keys['KeyZ']) player.pos.y -= flySpeed * dt;
+
+player.vel.set(0, 0, 0);
+return;
+}
+
+// SWIMMING
+if (player.isInWater) {
+player.vel.y *= 0.85;
+player.vel.y -= 4.0 * dt;
+if (keys['Space']) player.vel.y = 5.2;
+if (keys['KeyC']) player.vel.y = -4.5;
+} else {
+if (player.jumpBufferTimer > 0 && (player.onGround || player.coyoteTimer > 0) && !player.isCrouching) {
+player.vel.y = 8.5;
+player.onGround = false;
+player.coyoteTimer = 0;
+player.jumpBufferTimer = 0;
+}
+}
+
+const maxStep = 0.016;
+let remainingTime = dt;
+
+while (remainingTime > 0) {
+const subDt = Math.min(remainingTime, maxStep);
+remainingTime -= subDt;
+
+player.pos.y += player.vel.y * subDt;
+if (checkVoxelCollision(player.pos)) {
+  if (player.vel.y < 0) {
+    const blockTop = Math.floor(player.pos.y - h + 0.01) + 1;
+    player.pos.y = blockTop + h + SKIN;
+    player.onGround = true;
+    player.coyoteTimer = 0.15;
+  } else if (player.vel.y > 0) {
+    const blockBottom = Math.floor(player.pos.y);
+    player.pos.y = blockBottom - SKIN;
+  }
+  player.vel.y = 0;
+} else {
+  player.onGround = false;
+  player.coyoteTimer = Math.max(0, player.coyoteTimer - subDt);
+}
+
+player.pos.x += player.vel.x * subDt;
+if (checkVoxelCollision(player.pos)) {
+  if (player.vel.x > 0) player.pos.x = Math.floor(player.pos.x + halfW) - halfW - SKIN;
+  else if (player.vel.x < 0) player.pos.x = Math.floor(player.pos.x - halfW) + 1 + halfW + SKIN;
+  player.vel.x = 0;
+}
+
+player.pos.z += player.vel.z * subDt;
+if (checkVoxelCollision(player.pos)) {
+  if (player.vel.z > 0) player.pos.z = Math.floor(player.pos.z + halfW) - halfW - SKIN;
+  else if (player.vel.z < 0) player.pos.z = Math.floor(player.pos.z - halfW) + 1 + halfW + SKIN;
+  player.vel.z = 0;
+}
+}
+
+if (player.pos.y < -1.0) damagePlayer(25 * dt, null);
+
+const currentFeetBlock = getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y - h + 0.5), Math.floor(player.pos.z));
+if (currentFeetBlock === BLOCK.LAVA) damagePlayer(25 * dt, null);
+if (currentFeetBlock === BLOCK.PORTAL) teleportDimension('Nether');
+}
+
+let teleportCooldown = false;
+function teleportDimension(targetDim) {
+if (teleportCooldown) return;
+teleportCooldown = true;
+
+const overlay = document.getElementById('sleep-overlay');
+overlay.style.opacity = '1';
+
+setTimeout(() => {
+currentDimension = targetDim;
+document.getElementById('hud-dim').textContent = currentDimension;
+document.getElementById('hud-dim').style.color = (currentDimension === 'The End') ? '#c084fc' : (currentDimension === 'Nether') ? '#ef4444' : '#38bdf8';
+
+for (const chunk of chunks.values()) {
+  if (chunk.group) scene.remove(chunk.group);
+}
+chunks.clear();
+
+mobs.forEach(m => scene.remove(m.mesh));
+mobs.length = 0;
+
+if (currentDimension === 'Nether') {
+  spawnMob('blaze', 0, 19, 6);
+  spawnMob('blaze', 4, 20, -8);
+} else if (currentDimension === 'The End') {
+  spawnEnderDragon();
+  startEndFightRecording();
+}
+
+player.pos.set(0.5, 22, 0.5);
+updateWorldChunks(0, 0);
+
+overlay.style.opacity = '0';
+setTimeout(() => { teleportCooldown = false; }, 2500);
+}, 1000);
+}
+
+// ==========================================
+// 8. INPUT LISTENERS & FAST INTERACTION
+// ==========================================
+let isMouseDown = false;
+const blocker = document.getElementById('blocker');
+
+blocker.addEventListener('click', () => {
+if (!isInventoryOpen && !isFurnaceOpen && !isTradeOpen && !isChestOpen && !isReplaying) {
+renderer.domElement.requestPointerLock();
+}
+});
+
+document.addEventListener('pointerlockchange', () => {
+isLocked = (document.pointerLockElement === renderer.domElement);
+if (!isInventoryOpen && !isFurnaceOpen && !isTradeOpen && !isChestOpen && !isReplaying) {
+blocker.style.display = isLocked ? 'none' : 'flex';
+}
+});
+window.addEventListener('contextmenu', e => e.preventDefault());
+
+const keys = {};
+window.addEventListener('keydown', e => {
+keys[e.code] = true;
+
+// Shift + C: Toggle Creative Mode
+if ((e.shiftKey || keys['ShiftLeft'] || keys['ShiftRight']) && e.code === 'KeyC') {
+e.preventDefault();
+toggleCreativeMode();
+return;
+}
+
+// DOUBLE-TAP SPACE: Toggle Creative Flight
+if (e.code === 'Space') {
+e.preventDefault();
+const now = performance.now();
+if (isCreativeMode && (now - lastSpacePressTime < 280)) {
+isFlying = !isFlying;
+document.getElementById('hud-flight').textContent = isFlying ? 'ON' : 'OFF';
+document.getElementById('hud-flight').style.color = isFlying ? '#38bdf8' : '#94a3b8';
+player.vel.y = 0;
+lastSpacePressTime = 0;
+return;
+}
+lastSpacePressTime = now;
+player.jumpBufferTimer = 0.18;
+}
+
+if (e.code === 'KeyR') reloadGun();
+if (e.code === 'KeyT') toggleInventory();
+if (e.code === 'Escape') {
+if (isFurnaceOpen) closeFurnaceUI();
+if (isTradeOpen) closeTradeUI();
+if (isChestOpen) closeChestUI();
+}
+if (['Digit1','Digit2','Digit3','Digit4','Digit5','Digit6','Digit7','Digit8','Digit9'].includes(e.code)) {
+selectSlot(parseInt(e.code.replace('Digit','')) - 1);
+}
+});
+
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+window.addEventListener('mousemove', e => {
+if (!isLocked || isInventoryOpen || isFurnaceOpen || isTradeOpen || isChestOpen || isReplaying) return;
+const sens = isAimingDownSights ? 0.0009 : 0.0022;
+player.yaw -= e.movementX * sens;
+player.pitch = Math.max(-Math.PI / 2.05, Math.min(Math.PI / 2.05, player.pitch - e.movementY * sens));
+});
+
+function raycastVoxel(origin, dir, maxDist = 6) {
+let px = origin.x, py = origin.y, pz = origin.z;
+let vx = Math.floor(px), vy = Math.floor(py), vz = Math.floor(pz);
+const stepX = Math.sign(dir.x), stepY = Math.sign(dir.y), stepZ = Math.sign(dir.z);
+const tDeltaX = Math.abs(1 / (dir.x || 1e-9)), tDeltaY = Math.abs(1 / (dir.y || 1e-9)), tDeltaZ = Math.abs(1 / (dir.z || 1e-9));
+let tMaxX = (stepX > 0 ? (vx + 1 - px) : (px - vx)) * tDeltaX;
+let tMaxY = (stepY > 0 ? (vy + 1 - py) : (py - vy)) * tDeltaY;
+let tMaxZ = (stepZ > 0 ? (vz + 1 - pz) : (pz - vz)) * tDeltaZ;
+
+let dist = 0, normal = [0, 0, 0];
+while (dist < maxDist) {
+const id = getBlock(vx, vy, vz);
+if (id !== BLOCK.AIR) return { hit: true, pos: [vx, vy, vz], normal, blockId: id };
+if (tMaxX < tMaxY) {
+if (tMaxX < tMaxZ) { dist = tMaxX; tMaxX += tDeltaX; vx += stepX; normal = [-stepX, 0, 0]; }
+else { dist = tMaxZ; tMaxZ += tDeltaZ; vz += stepZ; normal = [0, 0, -stepZ]; }
+} else {
+if (tMaxY < tMaxZ) { dist = tMaxY; tMaxY += tDeltaY; vy += stepY; normal = [0, -stepY, 0]; }
+else { dist = tMaxZ; tMaxZ += tDeltaZ; vz += stepZ; normal = [0, 0, -stepZ]; }
+}
+}
+return { hit: false };
+}
+
+let isMining = false;
+let miningTarget = null;
+let miningProgress = 0;
+const progContainer = document.getElementById('mining-progress-container');
+const progFill = document.getElementById('mining-progress-fill');
+
+window.addEventListener('mousedown', e => {
+if (!isLocked || isInventoryOpen || isFurnaceOpen || isTradeOpen || isChestOpen || isReplaying) return;
+
+const heldItem = hotbar[selectedSlot].item;
+
+if (e.button === 0) {
+isMouseDown = true;
+if (GUN_STATS[heldItem]) {
+fireGun(heldItem);
+} else {
+const forward = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(player.pitch, player.yaw, 0, 'YXZ'));
+const ray = new THREE.Ray(camera.position, forward);
+let hitMob = null;
+
+  for (const mob of mobs) {
+    if (mob.type === 'villager' || mob.type === 'iron_golem') continue;
+    const box = new THREE.Box3().setFromCenterAndSize(
+      new THREE.Vector3(mob.pos.x, mob.pos.y + mob.height/2, mob.pos.z),
+      new THREE.Vector3(mob.width, mob.height, mob.width)
+    );
+    const hitPt = new THREE.Vector3();
+    if (ray.intersectBox(box, hitPt) && camera.position.distanceTo(hitPt) < (mob.type === 'dragon' ? 12.0 : 4.0)) {
+      hitMob = mob; break;
+    }
+  }
+
+  if (hitMob) attackMob(hitMob);
+  else isMining = true;
+}
+}
+
+if (e.button === 2) {
+if (heldItem === 'ender_pearl') {
+throwEnderPearl();
+return;
+}
+
+const forward = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(player.pitch, player.yaw, 0, 'YXZ'));
+const ray = new THREE.Ray(camera.position, forward);
+let hitVillager = false;
+
+for (const mob of mobs) {
+  if (mob.type === 'villager') {
+    const box = new THREE.Box3().setFromCenterAndSize(
+      new THREE.Vector3(mob.pos.x, mob.pos.y + mob.height/2, mob.pos.z),
+      new THREE.Vector3(mob.width, mob.height, mob.width)
+    );
+    const hitPt = new THREE.Vector3();
+    if (ray.intersectBox(box, hitPt) && camera.position.distanceTo(hitPt) < 4.0) {
+      hitVillager = true; break;
+    }
+  }
+}
+
+if (hitVillager) {
+  openTradeUI();
+} else if (heldItem === 'sniper') {
+  enterADS();
+} else {
+  handleRightClick();
+}
+}
+});
+
+window.addEventListener('mouseup', e => {
+if (e.button === 0) {
+isMouseDown = false; isMining = false;
+miningTarget = null; miningProgress = 0;
+progContainer.style.display = 'none';
+}
+if (e.button === 2 && isAimingDownSights) exitADS();
+});
+
+function handleRightClick() {
+const forward = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(player.pitch, player.yaw, 0, 'YXZ'));
+const hit = raycastVoxel(camera.position, forward);
+if (!hit.hit) return;
+
+const targetBlock = getBlock(hit.pos[0], hit.pos[1], hit.pos[2]);
+const slot = hotbar[selectedSlot];
+
+if (targetBlock === BLOCK.CHEST) { openChestUI(); return; }
+if (targetBlock === BLOCK.FURNACE) { openFurnaceUI(); return; }
+if (targetBlock === BLOCK.CRAFTING_TABLE) { toggleInventory(); return; }
+
+if (slot.item === 'eye_of_ender' && targetBlock === BLOCK.END_PORTAL_FRAME) {
+teleportDimension('The End');
+if (!isCreativeMode) {
+slot.count--;
+if (slot.count <= 0) slot.item = null;
+renderHotbar();
+}
+return;
+}
+
+if (slot.item === 'flint_and_steel' || slot.item === 'lava_bucket') {
+const nx = hit.pos[0] + hit.normal[0], ny = hit.pos[1] + hit.normal[1], nz = hit.pos[2] + hit.normal[2];
+if (tryIgniteNetherPortal(nx, ny, nz)) return;
+}
+
+if (slot.item === 'bucket') {
+if (targetBlock === BLOCK.WATER) {
+setBlock(hit.pos[0], hit.pos[1], hit.pos[2], BLOCK.AIR);
+slot.item = 'water_bucket'; renderHotbar(); return;
+} else if (targetBlock === BLOCK.LAVA) {
+setBlock(hit.pos[0], hit.pos[1], hit.pos[2], BLOCK.AIR);
+slot.item = 'lava_bucket'; renderHotbar(); return;
+}
+}
+if (slot.item === 'water_bucket') {
+const nx = hit.pos[0] + hit.normal[0], ny = hit.pos[1] + hit.normal[1], nz = hit.pos[2] + hit.normal[2];
+setBlock(nx, ny, nz, BLOCK.WATER);
+slot.item = 'bucket'; renderHotbar(); return;
+}
+if (slot.item === 'lava_bucket') {
+const nx = hit.pos[0] + hit.normal[0], ny = hit.pos[1] + hit.normal[1], nz = hit.pos[2] + hit.normal[2];
+setBlock(nx, ny, nz, BLOCK.LAVA);
+slot.item = 'bucket'; renderHotbar(); return;
+}
+
+if (targetBlock === BLOCK.BED) {
+if (isNight) triggerSleep();
+else alert("You can only sleep at night!");
+return;
+}
+
+placeBlock(hit);
+}
+
+function tryIgniteNetherPortal(x, y, z) {
+let isFrameX = (getBlock(x - 1, y, z) === BLOCK.OBSIDIAN || getBlock(x + 1, y, z) === BLOCK.OBSIDIAN);
+let isFrameZ = (getBlock(x, y, z - 1) === BLOCK.OBSIDIAN || getBlock(x, y, z + 1) === BLOCK.OBSIDIAN);
+
+if (isFrameX || isFrameZ) {
+setBlock(x, y, z, BLOCK.PORTAL);
+setBlock(x, y + 1, z, BLOCK.PORTAL);
+setBlock(x, y + 2, z, BLOCK.PORTAL);
+return true;
+}
+return false;
+}
+
+function triggerSleep() {
+const overlay = document.getElementById('sleep-overlay');
+overlay.style.opacity = '1';
+setTimeout(() => {
+gameTime = 75;
+mobs.filter(m => m.type !== 'cow' && m.type !== 'villager' && m.type !== 'iron_golem').forEach(m => scene.remove(m.mesh));
+player.health = 100;
+overlay.style.opacity = '0';
+}, 1200);
+}
+
+function placeBlock(hit) {
+const slot = hotbar[selectedSlot];
+if (!slot.item || GUN_STATS[slot.item] || ['fists','pickaxe','stick','sword_wood','sword_stone','coal','iron_ingot','diamond','leather','bucket','water_bucket','lava_bucket','flint_and_steel','blaze_rod','eye_of_ender','dragon_tool','gunpowder','ammo_pistol','ammo_shotgun','ammo_rifle','emerald','ender_pearl'].includes(slot.item) || slot.item.includes('helmet') || slot.item.includes('chest') || slot.item.includes('legs') || slot.item.includes('boots') || slot.count <= 0) return;
+
+const nx = hit.pos[0] + hit.normal[0];
+const ny = hit.pos[1] + hit.normal[1];
+const nz = hit.pos[2] + hit.normal[2];
+
+const testBox = new THREE.Box3(new THREE.Vector3(nx, ny, nz), new THREE.Vector3(nx + 1, ny + 1, nz + 1));
+const pBox = new THREE.Box3(
+new THREE.Vector3(player.pos.x - player.width / 2, player.pos.y - getPlayerHeight(), player.pos.z - player.width / 2),
+new THREE.Vector3(player.pos.x + player.width / 2, player.pos.y, player.pos.z + player.width / 2)
+);
+if (testBox.intersectsBox(pBox)) return;
+
+const bMap = {
+stone: BLOCK.STONE, dirt: BLOCK.DIRT, wood: BLOCK.WOOD, planks: BLOCK.PLANKS,
+sand: BLOCK.SAND, cactus: BLOCK.CACTUS, leaves: BLOCK.LEAVES, glass: BLOCK.GLASS,
+furnace: BLOCK.FURNACE, bed: BLOCK.BED, obsidian: BLOCK.OBSIDIAN,
+end_stone: BLOCK.END_STONE, end_portal_frame: BLOCK.END_PORTAL_FRAME,
+cobblestone: BLOCK.COBBLESTONE, crafting_table: BLOCK.CRAFTING_TABLE, chest: BLOCK.CHEST
+};
+
+if (bMap[slot.item] !== undefined) {
+setBlock(nx, ny, nz, bMap[slot.item]);
+if (!isCreativeMode) {
+slot.count--;
+if (slot.count <= 0) slot.item = null;
+renderHotbar();
+}
+}
+}
+
+function handleMining(dt) {
+if (!isMining) return;
+const forward = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(player.pitch, player.yaw, 0, 'YXZ'));
+const hit = raycastVoxel(camera.position, forward);
+
+if (hit.hit) {
+const [x, y, z] = hit.pos;
+const bId = getBlock(x, y, z);
+if (bId === BLOCK.WATER || bId === BLOCK.LAVA || bId === BLOCK.PORTAL || bId === BLOCK.BEDROCK || bId === BLOCK.END_PORTAL_FRAME) {
+progContainer.style.display = 'none';
+return;
+}
+
+const curTool = hotbar[selectedSlot].item;
+const isDragonTool = (curTool === 'dragon_tool');
+
+if (isCreativeMode || isDragonTool) {
+  if (bId === BLOCK.HEALING_CRYSTAL) breakHealingCrystal(x, y, z);
+  setBlock(x, y, z, BLOCK.AIR);
+  progContainer.style.display = 'none';
+  return;
+}
+
+if (!miningTarget || miningTarget[0] !== x || miningTarget[1] !== y || miningTarget[2] !== z) {
+  miningTarget = [x, y, z];
+  miningProgress = 0;
+}
+
+const def = BLOCK_DEFS[bId] || { hardness: 1.0, minTier: 0, drop: 'dirt' };
+const tier = (curTool === 'pickaxe') ? 1 : 0;
+const speed = (curTool === 'pickaxe') ? 3.0 : 1.0;
+
+miningProgress += (dt / def.hardness) * speed;
+progContainer.style.display = 'block';
+progFill.style.width = Math.min(100, miningProgress * 100) + '%';
+
+if (miningProgress >= 1.0) {
+  if (bId === BLOCK.HEALING_CRYSTAL) breakHealingCrystal(x, y, z);
+  setBlock(x, y, z, BLOCK.AIR);
+  progContainer.style.display = 'none';
+  miningProgress = 0;
+  miningTarget = null;
+  if (tier >= def.minTier && def.drop) spawnDrop(x, y, z, def.drop);
+}
+} else {
+progContainer.style.display = 'none';
+miningProgress = 0;
+miningTarget = null;
+}
+}
+
+// ==========================================
+// 9. ANIMATION LOOP & AUDIO SYNC
+// ==========================================
+let prevTime = performance.now();
+let recordTickTimer = 0;
+
+function animate() {
+requestAnimationFrame(animate);
+const now = performance.now();
+const dt = Math.min((now - prevTime) / 1000, 0.05);
+prevTime = now;
+
+if (isReplaying) {
+if (endFightRecording.length > 0 && replayIndex < endFightRecording.length) {
+const snap = endFightRecording[replayIndex];
+camera.position.set(snap.camPos.x, snap.camPos.y + 4, snap.camPos.z + 8);
+camera.lookAt(snap.dragonPos.x, snap.dragonPos.y, snap.dragonPos.z);
+document.getElementById('replay-frame-text').textContent = ${replayIndex}/${endFightRecording.length};
+replayIndex++;
+} else {
+skipReplay();
+}
+renderer.render(scene, camera);
+return;
+}
+
+updateDayNight(dt);
+updateReload(dt);
+
+if (isMouseDown && isLocked && !isInventoryOpen && !isFurnaceOpen && !isTradeOpen && !isChestOpen) {
+const held = hotbar[selectedSlot].item;
+if (GUN_STATS[held] && GUN_STATS[held].auto) {
+fireGun(held);
+}
+}
+
+if (isLocked && !isInventoryOpen && !isFurnaceOpen && !isTradeOpen && !isChestOpen) {
+player.isSprinting = !!keys['ShiftLeft'] || !!keys['ShiftRight'];
+player.isCrouching = !!keys['KeyC'];
+
+let speed = 5.2;
+if (player.isInWater) speed = 3.6;
+else if (player.isSprinting && !player.isCrouching) speed = 8.5;
+else if (player.isCrouching) speed = 2.8;
+
+const targetFOV = isAimingDownSights ? 25 : (player.isSprinting ? 85 : 75);
+camera.fov = THREE.MathUtils.lerp(camera.fov, targetFOV, 14 * dt);
+camera.updateProjectionMatrix();
+
+const forward = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
+const side = new THREE.Vector3(Math.cos(player.yaw), 0, -Math.sin(player.yaw));
+const moveDir = new THREE.Vector3();
+
+if (keys['KeyW']) moveDir.add(forward);
+if (keys['KeyS']) moveDir.sub(forward);
+if (keys['KeyD']) moveDir.add(side);
+if (keys['KeyA']) moveDir.sub(side);
+if (moveDir.lengthSq() > 0) moveDir.normalize();
+
+player.vel.x = moveDir.x * speed;
+player.vel.z = moveDir.z * speed;
+
+if (!isCreativeMode && !player.isInWater) {
+  player.vel.y -= 24 * dt;
+  player.jumpBufferTimer = Math.max(0, player.jumpBufferTimer - dt);
+}
+
+resolvePlayerMovement(dt);
+handleMining(dt);
+updateWorldChunks(player.pos.x, player.pos.z);
+}
+
+player.timeSinceDamaged += dt;
+if (player.timeSinceDamaged > 4.0 && player.health < 100 && !isCreativeMode) {
+player.health = Math.min(100, player.health + 5.0 * dt);
+document.getElementById('health-bar-fill').style.width = player.health + '%';
+document.getElementById('hp-val').textContent = ${Math.ceil(player.health)}/100;
+}
+
+if (isRecordingEndFight && enderDragon) {
+recordTickTimer += dt;
+if (recordTickTimer > 0.08) {
+recordTickTimer = 0;
+endFightRecording.push({
+camPos: player.pos.clone(),
+dragonPos: enderDragon.pos.clone()
+});
+}
+}
+
+// Active Subsystems
+updateDrops(dt, player.pos);
+updateBullets(dt);
+updateFireballs(dt);
+updateEnderPearls(dt);
+
+const camY = player.pos.y - (player.isCrouching ? 0.35 : 0.0);
+camera.position.set(player.pos.x, camY, player.pos.z);
+camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
+
+document.getElementById('hud-coords').textContent = ${player.pos.x.toFixed(1)}, ${player.pos.y.toFixed(1)}, ${player.pos.z.toFixed(1)};
+document.getElementById('hud-biome').textContent = getBiome(player.pos.x, player.pos.z);
+updateMobs(dt);
+
+renderer.render(scene, camera);
+}
+
+// Initialise hotbar & startup loop
+renderHotbar();
+renderAllGrids();
+animate();
+
+window.addEventListener('resize', () => {
+camera.aspect = window.innerWidth / window.innerHeight;
+camera.updateProjectionMatrix();
+renderer.setSize(window.innerWidth, window.innerHeight);
+});
